@@ -1,0 +1,1121 @@
+---
+title:"PARTII PROJECT: ATHILA expression analysis"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+## Mapping the single mapping reads
+
+First install all the necessary packages
+
+```{r installing packages}
+install.packages(c("edgeR", "limma", "gplots"))
+if (!require("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+
+BiocManager::install("edgeR")
+install.packages("readr")
+install.packages("pheatmap")
+install.packages("DGEobj.utils")
+install.packages("RColorBrewer")
+install.packages("ggplot2")
+BiocManager::install('PCAtools')
+install.packages("ggVennDiagram")
+install.packages("devtools")
+install.packages("VennDiagram", dependencies=TRUE)
+install.packages("ggpubr")
+install.packages("RIdeogram")
+
+
+```
+
+Second load the libraries
+```{r library everything}
+library(DGEobj.utils)
+library(readr)
+library(limma)
+library(edgeR)
+library(pheatmap)
+library(RColorBrewer)
+library(ggplot2)
+library(PCAtools)
+library(stats)
+library(ggVennDiagram)
+library(ggpubr)
+library(RIdeogram)
+
+```
+
+The functions used in this scripts
+``` {r Data normalisation for creating a heatmap}
+#Uploading information on genelengths and ATHILA families
+gene_lengths_df = read_delim("short_read_data/athila_lengths.txt", delim="\t", col_names=TRUE)
+ATHILA_fams =  read_delim("short_read_data/ATHILA_combo_family.txt", delim="\t", col_names=TRUE)
+ATHILA_names <- c("ATHILA_general", "ATHILA0", "ATHILA1", "ATHILA1_hybrid1", "ATHILA2", "ATHILA2_hybrid0", "ATHILA2_hybrid5", "ATHILA2_hybrid6", "ATHILA3", "ATHILA4","ATHILA4_general","ATHILA4a","ATHILA4c", "ATHILA4c_hybrid1", "ATHILA4c_hybrid2", "ATHILA5", "ATHILA6a","ATHILA6a_hybrid2", "ATHILA6b", "ATHILA7a", "ATHILA8a")
+ATHILA_cen =  read_delim("short_read_data/athila_centromeric.txt", delim="\t", col_names=TRUE)
+ATHILA_chr = read_delim("short_read_data/ATHILA_chr.txt", delim="\t", col_names=TRUE)
+
+cal_zscore <- function(x){
+  (x - mean(x)) / sd(x)
+}
+
+tpm_fun = function(project){
+  #Making sure the data frame is numeric
+  #project_df = cbind(project, gene_lengths)
+  project_df = as.matrix(project)
+  gene_lengths_lst = gene_lengths_df$gene_length
+  #Calculating TPM
+  tpm_df <- convertCounts(project_df,unit = "TPM",log = FALSE, geneLength = gene_lengths_lst, normalize = "none")
+  tpm_df = as.data.frame(tpm_df)
+  row.names(tpm_df) = rownames(project)
+  return(tpm_df)
+}
+cpm_fun_genes = function(project_genes){
+  #Making sure the data frame is numeric
+  #project_df = cbind(project, gene_lengths)
+  project_df = as.matrix(project_genes)
+  #Calculating TPM
+  cpm_df <- convertCounts(project_df,unit = "CPM",log = FALSE, normalize = "none")
+  cpm_df = as.data.frame(cpm_df)
+  row.names(cpm_df) = rownames(project_genes)
+  return(tpm_df)
+}
+
+#Calculates the z scores
+z_fun = function(project){
+  #Add info on families and centromeric or not
+  tpm_df = tpm_fun(project)
+  c_df = cbind(tpm_df, ATHILA_fams, ATHILA_cen)
+  #Remove the rows with TPM <1
+  tpm <- c_df[apply(tpm_df > 1, 1, any), ]
+  #Extract the gene lengths, ATHILA families and centromere info from the zero-variance
+  ATHILA_fams = tpm$Combo_family
+  ATHILA_cen = tpm$Centromeric
+  tpm[["Combo_family"]] = NULL
+  tpm[["Centromeric"]] = NULL
+  tpm = as.matrix(tpm)
+  #Calculate the z score
+  z_df = t(apply(tpm, 1, cal_zscore))
+  z_df = as.data.frame(z_df)
+  z_df = cbind(z_df, ATHILA_fams, ATHILA_cen)
+  #z_df_athila_order = z_df[order(z_df$ATHILA_fams_filt),]
+  #z_df_cen_order = z_df_athila_order[order(z_df_athila_order$ATHILA_cen_filt),]
+  return(z_df)
+}
+
+#Heatmap function that requires the z-score dataframe
+heatmap_fun = function(z_df, title="Heatmap", cut_lst=list(1,1)) {
+  cen_lengths = rle(z_df$ATHILA_cen)$lengths
+  cen_values = rle(z_df$ATHILA_cen)$values
+  ath_lengths = rle(z_df$ATHILA_fams)$lengths
+  ath_values = rle(z_df$ATHILA_fams)$values
+  #gaps_lst = cumsum(ath_lengths[1:length(ath_lengths)])
+  gaps_lst = cen_lengths[1]
+  colour_lst = rev(brewer.pal(9,"RdYlBu"))
+  annotdf_rows <- data.frame(ATHILA_family= rep(ath_values, ath_lengths), Centromeric = rep(cen_values, cen_lengths) )
+  row.names(annotdf_rows) = rownames(z_df)
+  annotation_colour_lst = list(
+  ATHILA_family = c(
+    "ATHILA_general" = "#1565C0",
+    "ATHILA0" = "brown",
+    "ATHILA1" = "#E83F6F",
+    "ATHILA1_hybrid1" = "magenta",
+    "ATHILA2" = "darkgreen",
+    "ATHILA2_hybrid0" = "#5E8C5B",
+    "ATHILA2_hybrid5" = "#6F9D6B",
+    "ATHILA2_hybrid6" = "#8BAC5D",
+    "ATHILA3" = "darkblue",
+    "ATHILA4" = "purple",
+    "ATHILA4_general" = "#9678B6",
+    "ATHILA4a" = "#A993C7",
+    "ATHILA4c" = "#C3B4D0",
+    "ATHILA4c_hybrid1" = "#D3CEDC",
+    "ATHILA4c_hybrid2" = "thistle",
+    "ATHILA5" = "yellow",
+    "ATHILA6a" = "#32DCCE",
+    "ATHILA6a_hybrid2" = "#8AEBE3",
+    "ATHILA6b" = "#B6F3EE",
+    "ATHILA7a" = "orange",
+    "ATHILA8a" = "pink"),
+  Centromeric = c(centromeric = "magenta",non_centromeric = "lightgrey"),)
+  heatmap = pheatmap(main = title, z_df[,-c(ncol(z_df)-1, ncol(z_df))], clustering_distance_rows = 'euclidean' , clustering_distance_cols = 'euclidean', clustering_method = "ward.D2",  show_rownames = FALSE, show_colnames = FALSE, gaps_row = gaps_lst, annotation_row = annotdf_rows, color = colour_lst,annotation_colors = annotation_colour_lst, border_color = FALSE, cutree_rows = cut_lst[1], cutree_cols = cut_lst[2])
+  return(heatmap)
+}
+
+#Heatmap function that uses the log2 filtered dataframe
+heatmap_fun2 = function(log2_df, title="Heatmap", cut=c(1,1), replicates_lst, colours) {
+  cen_lengths = rle(log2_df$Centromeric)$lengths
+  cen_values = rle(log2_df$Centromeric)$values
+  ath_lengths = rle(log2_df$Combo_family)$lengths
+  ath_values = rle(log2_df$Combo_family)$values
+  athila_len_lst = log2_df$athila_len
+  bin_size = 500
+  bin_lst = c()
+  for (athila in athila_len_lst){
+    bin = ceiling(athila/bin_size)
+    bin_lst = c(bin_lst,bin*bin_size)}
+  #gaps_lst = cumsum(ath_lengths[1:length(ath_lengths)])
+  colour_lst = c("#e9ecef",  brewer.pal(9,"YlOrRd"))
+  annotdf_rows <- data.frame("Location" = rep(cen_values, cen_lengths), "Lengths" = bin_lst, "Family"= rep(ath_values, ath_lengths))
+  row.names(annotdf_rows) = rownames(log2_df)
+  annotation_colour_lst = list(
+  Location = c(centromeric = "#400080",non_centromeric = "#E4C8FF"), 
+  Lengths = c("#D7D7AE", "#909020", "#545412"),
+  Family = c(
+    "ATHILA_general" = "#EC6DFF",
+    "ATHILA0" = "#5BC3FF",
+    "ATHILA1" = "#FFDB58",
+    "ATHILA1_hybrid1" = "#FFE893",
+    "ATHILA2" = "#006334",
+    "ATHILA2_hybrid0" = "#007623",
+    "ATHILA2_hybrid5" = "#008A12",
+    "ATHILA2_hybrid6" = "#009814",
+    "ATHILA3" = "#202092",
+    "ATHILA4" = "#8C0063",
+    "ATHILA4_general"= "#8C007B",
+    "ATHILA4a" = "#86008C",
+    "ATHILA4c" = "#6D008C",
+    "ATHILA4c_hybrid1" = "#73008C",
+    "ATHILA4c_hybrid2" = "#69008C",
+    "ATHILA5" ="#007580",
+    "ATHILA6a" = "#FF5700",
+    "ATHILA6a_hybrid2" ="#FF8100",
+    "ATHILA6b" = "#FFAC00",
+    "ATHILA7a" = "#BABED0",
+    "ATHILA8a" = "#FFA4E1"),
+  Genotype = colours
+  )
+  log2_df$athila_len= NULL
+  annotdf_cols = data.frame("Genotype"= replicates_lst)
+  row.names(annotdf_cols) = colnames(log2_df[1:length(replicates_lst)])
+  heatmap = pheatmap(main = title, log2_df[,-c(ncol(log2_df)-1, ncol(log2_df))], clustering_distance_rows = 'euclidean', clustering_distance_cols = 'euclidean', clustering_method = 'ward.D2', gaps_row = cut[2],gap_col = cut[1], annotation_row = annotdf_rows, color = colour_lst,annotation_colors = annotation_colour_lst, fontsize_row = 2, border_color = FALSE,show_rownames = FALSE,show_colnames = FALSE,cutree_cols = cut[1], cutree_rows = cut[2], annotation_col = annotdf_cols)
+  return(heatmap)
+}
+P_tpmlog2 = log2_filt(PRJEB9919)
+
+
+pca_biplot = function(project, title="PCA plot", replicates_lst, colours){
+  tpm = tpm_fun(project)
+  meta = data.frame("mutant" = colnames(tpm))
+  row.names(meta) = colnames(tpm)
+  meta$Genotype = replicates_lst
+  pca = pca(tpm, metadata = meta)
+  plot = biplot(pca,title = title, legendPosition = 'top', pointSize = 4.0, labSize = 4.0, max.overlaps = 10, colby = 'Genotype', colkey = colours, encircle = TRUE,legendLabSize = 12, legendIconSize = 4.0, lab = NULL, hline = 0, vline = 0)
+  #scree = barplot(pca$variance, col = "skyblue", main = "Scree plot of PCA", xlab = "Principal component", ylab = "Proportion of variance explained", inside = TRUE)
+  return(plot)
+}
+
+
+#Function creates a biplot PCA
+pca_biplot_genes = function(project_genes, title="PCA plot", replicates_lst, colours){
+  cpm = cpm_fun_genes(project_genes)
+  meta = data.frame("mutant" = colnames(cpm))
+  row.names(meta) = colnames(cpm)
+  meta$Genotype = replicates_lst
+  pca = pca(cpm, metadata = meta)
+  plot = biplot(pca,title = title, legendPosition = 'top', pointSize = 4.0, labSize = 4.0, max.overlaps = 10, colby = 'Genotype', colkey = colours, encircle = TRUE,legendLabSize = 12, legendIconSize = 4.0, lab = NULL, hline = 0, vline = 0)
+  #scree = barplot(pca$variance, col = "skyblue", main = "Scree plot of PCA", xlab = "Principal component", ylab = "Proportion of variance explained", inside = TRUE)
+  return(plot)
+}
+
+
+#Calculates log2 and filters a project
+log2_filt = function(project){
+  tpm = tpm_fun(project)
+  log2 = log2(tpm +1)
+  c_df = cbind(log2, ATHILA_fams, ATHILA_cen, athila_len)
+  c_df = as.data.frame(c_df)
+  row.names(c_df) = rownames(tpm)
+  #log2_filt = c_df[apply(log2 > 1, 1, any), ]
+  log2_filt <- c_df[apply(log2 > 0, 1, function(x) sum(x) >= 2), ]
+  return(log2_filt)
+}
+ 
+
+
+```
+
+Loading all the data 
+
+```{r loading the Readcounts}
+#PRJEB9919 multimapping
+
+ERR966157m = read_delim("short_read_data/PRJEB9919/PRJEB9919_mm/ERR966157_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ERR966158m = read_delim("short_read_data/PRJEB9919/PRJEB9919_mm/ERR966158_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ERR966159m = read_delim("short_read_data/PRJEB9919/PRJEB9919_mm/ERR966159_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ERR966160m = read_delim("short_read_data/PRJEB9919/PRJEB9919_mm/ERR966160_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ERR966161m = read_delim("short_read_data/PRJEB9919/PRJEB9919_mm/ERR966161_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ERR966162m = read_delim("short_read_data/PRJEB9919/PRJEB9919_mm/ERR966162_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+
+#combined counts table of the second column, gene lengths and the ATHILA_combo family
+PRJEB9919 = data.frame(wt_1 = ERR966157m[[2]], wt_2 = ERR966158m[[2]], wt_3 = ERR966159m[[2]], met1_1 = ERR966160m[[2]], met1_2 = ERR966161m[[2]], met1_3 = ERR966162m[[2]])
+rownames(PRJEB9919) = ERR966157m[[1]]
+#PRJEB9919 single-mapping
+
+ERR966157 = read_delim("short_read_data/PRJEB9919/PRJEB9919_sm/ERR966157_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ERR966158 = read_delim("short_read_data/PRJEB9919/PRJEB9919_sm/ERR966158_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ERR966159 = read_delim("short_read_data/PRJEB9919/PRJEB9919_sm/ERR966159_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ERR966160 = read_delim("short_read_data/PRJEB9919/PRJEB9919_sm/ERR966160_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ERR966161 = read_delim("short_read_data/PRJEB9919/PRJEB9919_sm/ERR966161_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ERR966162 = read_delim("short_read_data/PRJEB9919/PRJEB9919_sm/ERR966162_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+
+#combined counts table of the second column, gene lengths and the ATHILA_combo family
+PRJEB9919_2 = data.frame(wt_1 = ERR966157[[2]], wt_2 = ERR966158[[2]], wt_3 = ERR966159[[2]], met1_1 = ERR966160[[2]], met1_2 = ERR966161[[2]], met1_3 = ERR966162[[2]])
+
+#PRJEB9919 genes
+ERR966157 = read_delim("short_read_data/PRJEB9919_genes/ERR966157_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ERR966158 = read_delim("short_read_data/PRJEB9919_genes/ERR966158_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ERR966159 = read_delim("short_read_data/PRJEB9919_genes/ERR966159_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ERR966160 = read_delim("short_read_data/PRJEB9919_genes/ERR966160_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ERR966161 = read_delim("short_read_data/PRJEB9919_genes/ERR966161_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ERR966162 = read_delim("short_read_data/PRJEB9919_genes/ERR966162_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+
+#combined counts table of the second column, gene lengths and the ATHILA_combo family
+PRJEB9919_genes = data.frame(wt_1 = ERR966157[[2]], wt_2 = ERR966158[[2]], wt_3 = ERR966159[[2]], met1_1 = ERR966160[[2]], met1_2 = ERR966161[[2]], met1_3 = ERR966162[[2]])
+
+#PRJNA280957
+SRR1970634 = read_delim("short_read_data/PRJNA280957/SRR1970634_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+SRR1970635 = read_delim("short_read_data/PRJNA280957/SRR1970635_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+SRR1970637 = read_delim("short_read_data/PRJNA280957/SRR1970637_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+SRR1970638 = read_delim("short_read_data/PRJNA280957/SRR1970638_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+SRR1970640 = read_delim("short_read_data/PRJNA280957/SRR1970640_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+SRR1970641 = read_delim("short_read_data/PRJNA280957/SRR1970641_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+SRR1970643 = read_delim("short_read_data/PRJNA280957/SRR1970643_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+SRR1970644 = read_delim("short_read_data/PRJNA280957/SRR1970644_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+
+#combined counts table of the second column
+PRJNA280957 = data.frame(wt_1=SRR1970634[[2]], wt_2=SRR1970635[[2]], brat1_1=SRR1970637[[2]], brat1_2=SRR1970638[[2]], nrpe1_1=SRR1970640[[2]], nrpe1_2=SRR1970641[[2]], brat1_nrpe1_1=SRR1970643[[2]], brat1_nrpe1_2=SRR1970644[[2]])
+rownames(PRJNA280957) = SRR1970634[[1]]
+
+wt_av = rowMeans(PRJNA280957[,c(1,2)])
+brat1_av = rowMeans(PRJNA280957[,c(3,4)])
+nrpe1_av = rowMeans(PRJNA280957[,c(5,6)])
+brat1_nrpe1_av = rowMeans(PRJNA280957[,c(7,8)])
+
+PRJNA280957_av = data.frame(wt_av, brat1_av, nrpe1_av, brat1_nrpe1_av)
+rownames(PRJNA280957_av) = SRR1970634[[1]]
+
+SRR8792526 = read_delim("short_read_data/PRJNA529391/SRR8792526_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+SRR8792527 = read_delim("short_read_data/PRJNA529391/SRR8792527_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+SRR8792528 = read_delim("short_read_data/PRJNA529391/SRR8792528_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+SRR8792529 = read_delim("short_read_data/PRJNA529391/SRR8792529_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+SRR8792530 = read_delim("short_read_data/PRJNA529391/SRR8792530_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+SRR8792531 = read_delim("short_read_data/PRJNA529391/SRR8792531_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+
+#combined counts table of the second column
+PRJNA529391 = data.frame(ddm12_1=SRR8792526[[2]], ddm12_2=SRR8792527[[2]], ddm12_3=SRR8792528[[2]], ddm12_rdr6_1=SRR8792529[[2]],ddm12_rdr6_2=SRR8792530[[2]],ddm12_rdr6_3=SRR8792531[[2]])
+rownames(PRJNA529391) = SRR8792526[[1]]
+
+
+#PRJNA342309
+SRR4204534 = read_delim("short_read_data/PRJNA342309/SRR4204534_STARSingle1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+SRR4204535 = read_delim("short_read_data/PRJNA342309/SRR4204535_STARSingle1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+SRR4204540 = read_delim("short_read_data/PRJNA342309/SRR4204540_STARSingle1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+SRR4204541 = read_delim("short_read_data/PRJNA342309/SRR4204541_STARSingle1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+SRR4204542 = read_delim("short_read_data/PRJNA342309/SRR4204542_STARSingle1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+SRR4204543 = read_delim("short_read_data/PRJNA342309/SRR4204543_STARSingle1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+SRR4204547 = read_delim("short_read_data/PRJNA342309/SRR4204547_STARSingle1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+SRR4204551 = read_delim("short_read_data/PRJNA342309/SRR4204551_STARSingle1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+SRR4204557 = read_delim("short_read_data/PRJNA342309/SRR4204557_STARSingle1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+SRR4204561 = read_delim("short_read_data/PRJNA342309/SRR4204561_STARSingle1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+SRR4204565 = read_delim("short_read_data/PRJNA342309SRR4204565_STARSingle1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+SRR4204566 = read_delim("short_read_data/PRJNA342309/SRR4204566_STARSingle1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+
+PRJNA342309 = data.frame(leaf_wt_1 = SRR4204561[[2]], leaf_wt_2 = SRR4204565[[2]], leaf_wt_3 = SRR4204566[[2]],leaf_drm1_drm2 = SRR4204557[[2]],meiocyte_wt_1 = SRR4204534[[2]], meiocyte_wt_2 = SRR4204535[[2]], meiocyte_wt_3 = SRR4204540[[2]], meiocyte_drm1_drm2_1 = SRR4204541[[2]], meiocyte_drm1_drm2_2 = SRR4204542[[2]], meiocyte_drm1_drm2_3 = SRR4204543[[2]], meiocyte_drm1_drm2_4 = SRR4204547[[2]], meiocyte_drm1_drm2_5 = SRR4204551[[2]])
+rownames(PRJNA342309) = SRR4204534[[1]]
+
+average_wt_leaf = rowMeans(PRJNA342309[,c(1,2,3)], na.rm = TRUE)
+average_wt_meiocyte = rowMeans(PRJNA342309[,c(5,6,7)], na.rm = TRUE)
+average_drm12_meiocyte = rowMeans(PRJNA342309[,c(8,9,10,11,12)], na.rm = TRUE)
+PRJNA342309_av = data.frame(leaf_wt_av = average_wt_leaf, leaf_drm1_2 = PRJNA342309[[4]], meiocyte_wt_av = average_wt_meiocyte, meioctye_drm1_2_av = average_drm12_meiocyte)
+rownames(PRJNA342309_av) = SRR4204534[[1]]
+
+PRJNA342309_leaf = data.frame(leaf_wt_1 = SRR4204561[[2]], leaf_wt_2 = SRR4204565[[2]], leaf_wt_3 = SRR4204566[[2]],leaf_drm1_drm2 = SRR4204557[[2]])
+rownames(PRJNA342309_leaf) = SRR4204534[[1]]
+
+PRJNA342309_mei = data.frame(meiocyte_wt_1 = SRR4204534[[2]], meiocyte_wt_2 = SRR4204535[[2]], meiocyte_wt_3 = SRR4204540[[2]], meiocyte_drm1_drm2_1 = SRR4204541[[2]], meiocyte_drm1_drm2_2 = SRR4204542[[2]], meiocyte_drm1_drm2_3 = SRR4204543[[2]], meiocyte_drm1_drm2_4 = SRR4204547[[2]], meiocyte_drm1_drm2_5 = SRR4204551[[2]])
+rownames(PRJNA342309_mei) = SRR4204534[[1]]
+
+#PRJNA300685
+
+wt1 = read_delim("short_read_data/PRJNA300685/SRR2878548_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+wt2 = read_delim("short_read_data/PRJNA300685/SRR2878549_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+wt3 = read_delim("short_read_data/PRJNA300685/SRR2878550_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ddm11 = read_delim("short_read_data/PRJNA300685/SRR2878560_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ddm12 = read_delim("short_read_data/PRJNA300685/SRR2878561_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ddm13 = read_delim("short_read_data/PRJNA300685/SRR2878562_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+
+PRJNA300685 = data.frame(wt_1 = wt1[[2]],wt_2 = wt2[[2]],wt_3 = wt3[[2]],ddm1_1 = ddm11[[2]],ddm1_2 = ddm12[[2]],ddm1_3 = ddm13[[2]])
+rownames(PRJNA300685) = wt1[[1]]
+
+
+
+#PRJNA439011
+wt1 = read_delim("short_read_data/PRJNA439011/SRR6865163_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+wt2 = read_delim("short_read_data/PRJNA439011/SRR6865164_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ago42_1 = read_delim("short_read_data/PRJNA439011/SRR6865167_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ago42_2 = read_delim("short_read_data/PRJNA439011/SRR6865168_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ago43_1 = read_delim("short_read_data/PRJNA439011/SRR6865171_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ago43_2 = read_delim("short_read_data/PRJNA439011/SRR6865172_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+
+PRJNA439011 = data.frame(wt_1 = wt1[[2]], wt_2 = wt2[[2]], ago4_2_1 = ago42_1[[2]], ago42_2 = ago42_2[[2]], ago4_3_1 = ago43_1[[2]], ago4_3_2 = ago43_2[[2]])
+rownames(PRJNA439011) = wt1[[1]]
+
+
+#PRJEB32665
+ERR3333388 = read_delim("short_read_data/PRJEB32665/ERR3333388_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ERR3333389 = read_delim("short_read_data/PRJEB32665/ERR3333389_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ERR3333390 = read_delim("short_read_data/PRJEB32665/ERR3333390_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ERR3333391 = read_delim("short_read_data/PRJEB32665/ERR3333391_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ERR3333392 = read_delim("short_read_data/PRJEB32665/ERR3333392_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ERR3333393 = read_delim("short_read_data/PRJEB32665/ERR3333393_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ERR3333394 = read_delim("short_read_data/PRJEB32665/ERR3333394_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ERR3333395 = read_delim("short_read_data/PRJEB32665/ERR3333395_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ERR3333396 = read_delim("short_read_data/PRJEB32665/ERR3333396_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ERR3333397 = read_delim("short_read_data/PRJEB32665/ERR3333397_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ERR3333398 = read_delim("short_read_data/PRJEB32665/ERR3333398_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ERR3333399 = read_delim("short_read_data/PRJEB32665/ERR3333399_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ERR3333400 = read_delim("short_read_data/PRJEB32665/ERR3333400_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ERR3333401 = read_delim("short_read_data/PRJEB32665/ERR3333401_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ERR3333402 = read_delim("short_read_data/PRJEB32665/ERR3333402_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ERR3333403 = read_delim("short_read_data/PRJEB32665/ERR3333403_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ERR3333404 = read_delim("short_read_data/PRJEB32665/ERR3333404_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ERR3333405 = read_delim("short_read_data/PRJEB32665/ERR3333405_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ERR3333406 = read_delim("short_read_data/PRJEB32665/ERR3333406_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ERR3333407 = read_delim("short_read_data/PRJEB32665/ERR3333407_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ERR3333408 = read_delim("short_read_data/PRJEB32665/ERR3333408_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ERR3333409 = read_delim("short_read_data/PRJEB32665/ERR3333409_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ERR3333410 = read_delim("short_read_data/PRJEB32665/ERR3333410_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ERR3333411 = read_delim("short_read_data/PRJEB32665/ERR3333411_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ERR3333412 = read_delim("short_read_data/PRJEB32665/ERR3333412_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ERR3333413 = read_delim("short_read_data/PRJEB32665/ERR3333413_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ERR3333414 = read_delim("short_read_data/PRJEB32665/ERR3333414_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ERR3333415 = read_delim("short_read_data/PRJEB32665/ERR3333415_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ERR3333416 = read_delim("short_read_data/PRJEB32665/ERR3333416_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ERR3333417 = read_delim("short_read_data/PRJEB32665/ERR3333417_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ERR3333418 = read_delim("short_read_data/PRJEB32665/ERR3333418_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ERR3333419 = read_delim("short_read_data/PRJEB32665/ERR3333419_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ERR3333420 = read_delim("short_read_data/PRJEB32665/ERR3333420_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ERR3333421 = read_delim("short_read_data/PRJEB32665/ERR3333421_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ERR3333422 = read_delim("short_read_data/PRJEB32665/ERR3333422_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ERR3333423 = read_delim("short_read_data/PRJEB32665/ERR3333423_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ERR3333424 = read_delim("short_read_data/PRJEB32665/ERR3333424_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ERR3333425 = read_delim("short_read_data/PRJEB32665/ERR3333425_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ERR3333426 = read_delim("short_read_data/PRJEB32665/ERR3333426_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ERR3333427 = read_delim("short_read_data/PRJEB32665/ERR3333427_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ERR3333428 = read_delim("short_read_data/PRJEB32665/ERR3333428_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ERR3333429 = read_delim("short_read_data/PRJEB32665/ERR3333429_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ERR3333430 = read_delim("short_read_data/PRJEB32665/ERR3333430_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ERR3333431 = read_delim("short_read_data/PRJEB32665/ERR3333431_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ERR3333432 = read_delim("short_read_data/PRJEB32665/ERR3333432_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ERR3333433 = read_delim("short_read_data/PRJEB32665/ERR3333433_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ERR3333434 = read_delim("short_read_data/PRJEB32665/ERR3333434_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ERR3333435 = read_delim("short_read_data/PRJEB32665/ERR3333435_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ERR3333436 = read_delim("short_read_data/PRJEB32665/ERR3333436_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ERR3333437 = read_delim("short_read_data/PRJEB32665/ERR3333437_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ERR3333438 = read_delim("short_read_data/PRJEB32665/ERR3333438_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ERR3333439 = read_delim("short_read_data/PRJEB32665/ERR3333439_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+#ERR3333440 = read_delim("ERR3333440_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ERR3333441 = read_delim("short_read_data/PRJEB32665/ERR3333441_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ERR3333442 = read_delim("short_read_data/PRJEB32665/ERR3333442_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ERR3333443 = read_delim("short_read_data/PRJEB32665/ERR3333443_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+
+
+PRJEB32665 = data.frame(sepal=ERR3333388[[2]],stem_node=ERR3333389[[2]],stem_internode=ERR3333390[[2]],cauline_leaf=ERR3333391[[2]],rosette_leaf_7proxpart=ERR3333392[[2]],rosette_leaf_7distalpart=ERR3333393[[2]],petiole=ERR3333394[[2]],adult_vasc_leaf=ERR3333395[[2]],root_adult=ERR3333396[[2]],flower_pedicel=ERR3333397[[2]],flower=ERR3333398[[2]],petal=ERR3333399[[2]], root_septum=ERR3333400[[2]],fruit_valve=ERR3333401[[2]],plant_callus=ERR3333402[[2]],plant_callus2=ERR3333403[[2]],root_cellculture=ERR3333404[[2]],root_celculture2=ERR3333405[[2]],cotyledon=ERR3333406[[2]],hypocotyl=ERR3333407[[2]],root_tip1=ERR3333408[[2]],root_tip2=ERR3333409[[2]],stamen=ERR3333410[[2]],mixed_sam_cotyledon_firstleaves=ERR3333411[[2]],cotyledon=ERR3333412[[2]],rosette_leaf1=ERR3333413[[2]],rosette_leaf2=ERR3333414[[2]],rosette_leaf3=ERR3333415[[2]],rosette_leaf4=ERR3333416[[2]],rosette_leaf5=ERR3333417[[2]],rosette_leaf6=ERR3333418[[2]],rosette_leaf7=ERR3333419[[2]],rosette_leaf8=ERR3333420[[2]],carpel=ERR3333421[[2]],rosette_leaf9=ERR3333422[[2]],rosette_leaf10=ERR3333423[[2]],rosette_leaf11=ERR3333424[[2]],rosette_leaf12=ERR3333425[[2]],flower1=ERR3333426[[2]],flower2=ERR3333427[[2]],flower3=ERR3333428[[2]],flower4=ERR3333429[[2]],flower5=ERR3333430[[2]],
+silique1=ERR3333431[[2]],silique2=ERR3333432[[2]],silique3=ERR3333433[[2]],silique4=ERR3333434[[2]],silique5=ERR3333435[[2]], seed1=ERR3333436[[2]], seed2=ERR3333437[[2]], seed3=ERR3333438[[2]], seed4=ERR3333439[[2]], seed6=ERR3333441[[2]], seed7=ERR3333442[[2]], pollen=ERR3333443[[2]])
+rownames(PRJEB32665) = ERR3333388[[1]]
+
+PRJEB32665
+average_rosette_leaf = rowMeans(PRJEB32665[,c(5,6,26,28,28,29,30,31,32,33,35,36,37,38)], na.rm = TRUE)
+average_flower = rowMeans(PRJEB32665[,c(11,39,40,41,42,43)], na.rm = TRUE)
+average_silique = rowMeans(PRJEB32665[,44:48])
+average_root_cellculture = rowMeans(PRJEB32665[,c(9,17,18)])
+average_root_tip = rowMeans(PRJEB32665[,21:22])
+average_callus = rowMeans(PRJEB32665[,15:16])
+
+PRJEB32665_av = data.frame(sepal=ERR3333388[[2]],stem_node=ERR3333389[[2]],stem_internode=ERR3333390[[2]],cauline_leaf=ERR3333391[[2]],petiole=ERR3333394[[2]],adult_vasc_leaf=ERR3333395[[2]],flower_pedicel=ERR3333397[[2]],petal=ERR3333399[[2]], root_septum=ERR3333400[[2]],fruit_valve=ERR3333401[[2]],callus=average_callus,cotyledon=ERR3333406[[2]],hypocotyl=ERR3333407[[2]],stamen=ERR3333410[[2]],mixed_sam=ERR3333411[[2]],cotyledon=ERR3333412[[2]],carpel=ERR3333421[[2]],flower = average_flower, root_tip = average_root_tip, silique = average_silique, root_cellculture = average_root_cellculture)
+rownames(PRJEB32665_av) = ERR3333388[[1]]
+dim(PRJEB32665_av)
+
+
+PRJEB32665_av2 = data.frame(sepal=ERR3333388[[2]],stem_node=ERR3333389[[2]],stem_internode=ERR3333390[[2]],cauline_leaf=ERR3333391[[2]],petiole=ERR3333394[[2]],adult_vasc_leaf=ERR3333395[[2]],flower_pedicel=ERR3333397[[2]],petal=ERR3333399[[2]],root_septum=ERR3333400[[2]],fruit_valve=ERR3333401[[2]],plant_callus=ERR3333402[[2]],plant_callus2=ERR3333403[[2]],cotyledon=ERR3333406[[2]],hypocotyl=ERR3333407[[2]],stamen=ERR3333410[[2]],mixed_sam_cotyledon_firstleaves=ERR3333411[[2]],cotyledon=ERR3333412[[2]],carpel=ERR3333421[[2]],average_flower, average_root_tip, average_silique)
+rownames(PRJEB32665_av2) = ERR3333388[[1]]
+
+PRJEB32665_fp = data.frame(sepal=ERR3333388[[2]], flower_s9=ERR3333426[[2]],flower_s10=ERR3333427[[2]],flower_s11=ERR3333428[[2]],flower_s12=ERR3333429[[2]],flower_s13=ERR3333430[[2]],
+silique_s1=ERR3333431[[2]],silique_s3=ERR3333432[[2]],silique_s2=ERR3333433[[2]],silique_s4=ERR3333434[[2]],silique_s5=ERR3333435[[2]], petal=ERR3333399[[2]],stamen=ERR3333410[[2]],carpel=ERR3333421[[2]], hypocotyl=ERR3333407[[2]])
+
+
+
+#PRJNA716808
+
+
+wt1 = read_delim("short_read_data/PRJNA716808/SRR14056771_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+wt2 = read_delim("short_read_data/PRJNA716808/SRR14056772_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+wt3 = read_delim("short_read_data/PRJNA716808/SRR14056773_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+#ddcc1 = read_delim("short_read_data/PRJNA716808/SRR14056774_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ddcc2 = read_delim("short_read_data/PRJNA716808/SRR14056775_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+ddcc3 = read_delim("short_read_data/PRJNA716808/SRR14056776_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+met191 = read_delim("short_read_data/PRJNA716808/SRR14056777_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+#met192 = read_delim("short_read_data/PRJNA716808/SRR14056778_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+met193 = read_delim("short_read_data/PRJNA716808/SRR14056779_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+mddcc1 = read_delim("short_read_data/PRJNA716808/SRR14056780_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+mddcc2 = read_delim("short_read_data/PRJNA716808/SRR14056781_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+mddcc3 = read_delim("short_read_data/PRJNA716808/SRR14056782_STARPaired1hitSortedReadsPerGene.out.tab", skip = 4, col_names = FALSE)
+
+
+PRJNA716808 = data.frame(wt_1 = wt1[[2]], wt_2 = wt2[[2]], wt_3 = wt3[[2]], ddcc_2 = ddcc2[[2]], ddcc_3 = ddcc3[[2]], met1_9_1 = met191[[2]],  met1_9_3 = met193[[2]], mddcc_1 = mddcc1[[2]], mddcc_2 = mddcc2[[2]], mddcc_3 = mddcc3[[2]])
+
+rownames(PRJNA716808) = wt1[[1]]
+PRJNA716808_2 = data.frame(wt_1 = wt1[[2]], wt_2 = wt2[[2]], wt_3 = wt3[[2]],met1_9_1 = met191[[2]],  met1_9_3 = met193[[2]])
+rownames(PRJNA716808_2) = wt1[[1]]
+
+###########PRJEB53881
+
+
+ERR10012763 = read_delim("long_read_analysis/PRJEB53881/ERR10012763.txt", delim = "\t", n_max = 344, col_names = FALSE)
+ERR10039314 = read_delim("long_read_analysis/PRJEB53881/ERR10039314.txt", delim = "\t", n_max = 344, col_names = FALSE)
+ERR9991644 = read_delim("long_read_analysis/PRJEB53881/ERR9991644.txt", delim = "\t", n_max = 344, col_names = FALSE)
+ERR9998465= read_delim("long_read_analysis/PRJEB53881/ERR9998465.txt", delim = "\t", n_max = 344, col_names = FALSE)
+ERR10012764= read_delim("long_read_analysis/PRJEB53881/ERR10012764.txt", delim = "\t", n_max = 344, col_names = FALSE)
+ERR9951996= read_delim("long_read_analysis/PRJEB53881/ERR9951996.txt", delim = "\t", n_max = 344, col_names = FALSE)
+ERR9980302= read_delim("long_read_analysis/PRJEB53881/ERR9980302.txt", delim = "\t", n_max = 344, col_names = FALSE)
+ERR9991645= read_delim("long_read_analysis/PRJEB53881/ERR9991645.txt", delim = "\t", n_max = 344, col_names = FALSE)
+ERR9994660= read_delim("long_read_analysis/PRJEB53881/ERR9994660.txt", delim = "\t", n_max = 344, col_names = FALSE)
+ERR9998463= read_delim("long_read_analysis/PRJEB53881/ERR9998463.txt", delim = "\t", n_max = 344, col_names = FALSE)
+ERR9998464= read_delim("long_read_analysis/PRJEB53881/ERR9998464.txt", delim = "\t", n_max = 344, col_names = FALSE)
+ERR10012762= read_delim("long_read_analysis/PRJEB53881/ERR10012762.txt", delim = "\t", n_max = 344, col_names = FALSE)
+ERR10039313= read_delim("long_read_analysis/PRJEB53881/ERR10039313.txt", delim = "\t", n_max = 344, col_names = FALSE)
+ERR10039315= read_delim("long_read_analysis/PRJEB53881/ERR10039315.txt", delim = "\t", n_max = 344, col_names = FALSE)
+ERR9929018= read_delim("long_read_analysis/PRJEB53881/ERR9929018.txt", delim = "\t", n_max = 344, col_names = FALSE)
+ERR9929578= read_delim("long_read_analysis/PRJEB53881/ERR9929578.txt", delim = "\t", n_max = 344, col_names = FALSE)
+ERR9941107= read_delim("long_read_analysis/PRJEB53881/ERR9941107.txt", delim = "\t", n_max = 344, col_names = FALSE)
+ERR9951994= read_delim("long_read_analysis/PRJEB53881/ERR9951994.txt", delim = "\t", n_max = 344, col_names = FALSE)
+ERR9980301= read_delim("long_read_analysis/PRJEB53881/ERR9980301.txt", delim = "\t", n_max = 344, col_names = FALSE)
+ERR9981958= read_delim("long_read_analysis/PRJEB53881/ERR9981958.txt", delim = "\t", n_max = 344, col_names = FALSE)
+
+PRJEB53881 = data.frame(wt_1 = -[2]], ibm1_1 = ERR9998463[[2]], ibm1_2 = ERR9998464	[[2]], ibm1_3 = ERR9998465[[2]], ibm2_1 = ERR10012762[[2]],ibm2_2 = ERR10012763[[2]], ibm2_3 = ERR10012764[[2]], edm2_1 = ERR10039313[[2]], edm2_2 = ERR10039314[[2]],edm2_3 =ERR10039315[[2]] )
+rownames(PRJEB53881) = ERR9929018[[1]]
+
+PRJEB53881_2 = PRJEB53881[,c(1:11)]
+
+wt_av = rowMeans(PRJEB53881[,c(1:2)], na.rm = TRUE)
+met1_av = rowMeans(PRJEB53881[,c(3,4,5)], na.rm = TRUE)
+ddm1_av = rowMeans(PRJEB53881[,c(6,7,8)], na.rm = TRUE)
+suvh456_av = rowMeans(PRJEB53881[,c(9,10,11)], na.rm = TRUE)
+
+PRJEB53881_av = data.frame(wt_av, met1_av, ddm1_av, suvh456_av)
+
+
+####################################################NOT working yet...#################3
+
+SRR11058975 = read_delim("/long_read_analysis/PRJNA605833/SRR11058975.txt", delim = "\t", col_names = FALSE)
+SRR11058976 = read_delim("/long_read_analysis/PRJNA605833/SRR11058976.txt", delim = "\t", n_max = countLines("/long_read_analysis/PRJNA605833/SRR11058976.txt") - 5, col_names = FALSE)
+SRR11058977 = read_delim("/long_read_analysis/PRJNA605833/SRR11058977.txt", delim = "\t", n_max = countLines("/long_read_analysis/PRJNA605833/SRR11058977.txt") - 5, col_names = FALSE)
+SRR11058978 = read_delim("/long_read_analysis/PRJNA605833/SRR11058978.txt", delim = "\t", n_max = countLines("/long_read_analysis/PRJNA605833/SRR11058978.txt") - 5, col_names = FALSE)
+SRR11058979 = read_delim("/long_read_analysis/PRJNA605833/SRR11058979.txt", delim = "\t", n_max = countLines("/long_read_analysis/PRJNA605833/SRR11058979.txt") - 5, col_names = FALSE)
+SRR11058980 = read_delim("/long_read_analysis/PRJNA605833/SRR11058980.txt", delim = "\t", n_max = countLines("/long_read_analysis/PRJNA605833/SRR11058980.txt") - 5, col_names = FALSE)
+
+
+PRJNA605833 = data.frame(wt = SRR11058975[[2]], ddm1 = SRR11058976[[2]],ddm1_rdr6 = SRR11058977[[2]],ddm1_polV = SRR11058978[[2]],ddm1_rdr6_polV_1 = SRR11058979[[2]],ddm1_rdr6_polV_2 = SRR11058980[[2]])
+
+
+
+log2_df = log2_filt(PRJNA716808)
+heatmap = heatmap_fun2(log2_df, "PRJNA716808", c(2,2))
+ggsave("PRJNA716808.png", heatmap, width = 8, height = 8, dpi = 300)
+
+
+
+
+```
+
+Project 1: PRJEB9919 met1
+```{r PRJEB9919}
+
+cols_1 = c("met1" = "#45009E", "WT" = "#5A9E00")
+reps_1 = c(rep("WT",3), rep("met1", 3))
+##### PCA #####
+
+#Single-mapping PCA plot
+pca_sm = pca_biplot(PRJEB9919_2, "ATHILA (singe-mapped)", reps_1, cols_1)
+#Multi-mapping PCA plot
+pca_mm = pca_biplot(PRJEB9919, "ATHILA (multi-mapped)", reps_1, cols_1)
+#Genes PCA plot
+pca_genes = pca_biplot_genes(PRJEB9919_genes, "Genes (multi-mapped)", reps_1, cols_1)
+
+pca_arr = ggarrange(pca_sm, pca_mm, pca_genes, ncol = 3, labels = "AUTO")
+ggsave("figures/pca_1.png", pca_arr, width = 15, height = 6, dpi = 400)
+
+#####Heatmaps#####
+log2_PRJEB9919 = log2_filt(PRJEB9919)
+heatmap = heatmap_fun2(log2_PRJEB9919, "ATHILA expression in met1 and WT", c(2,2), reps_1, cols_1)
+ggsave("figures/heatmap1.png", heatmap, width = 8, height = 9, dpi = 400)
+
+
+#############DEG genes############
+project_hclust_athila = hclust(dist(log2_PRJEB9919), method = "ward.D2")
+athila_col = cutree(tree = project_hclust_athila, k = 2, h = NULL)
+athila_col=data.frame(cluster = ifelse(test = athila_col == 1, yes = "cluster1", no = "cluster2"))
+condition_col = athila_col$cluster
+#Look at the ones that are upregulated in met1 compared to wildtype
+met1_up = rownames(log2_PRJEB9919)[condition_col=="cluster2"]
+met1_wt_same = rownames(log2_PRJEB9919)[condition_col=="cluster1"]
+length(met1_up)
+length(met1_wt_same)
+
+#####Log2 fold change box plot#####
+PRJEB9919_fc = data.frame(rowMeans(log2_PRJEB9919[,4:6]) - rowMeans(log2_PRJEB9919[,1:3]))
+colnames(PRJEB9919_fc) = "log2fc"
+PRJEB9919_fc_1 = PRJEB9919_fc[rownames(PRJEB9919_fc)%in%met1_up,]
+PRJEB9919_fc_2 =PRJEB9919_fc[rownames(PRJEB9919_fc)%in%met1_wt_same,]
+PRJEB9919_bp = data.frame(group = c(rep("ATHILA upregulated in met1",length(PRJEB9919_fc_1)),rep("Similarly expressed ATHILA",length(PRJEB9919_fc_2))), value = c(PRJEB9919_fc_1,PRJEB9919_fc_2))
+
+box = ggplot(PRJEB9919_bp, aes(x=group, y=value, fill=group)) +
+  geom_boxplot() +
+  theme_minimal() +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  ggtitle("Clustered expression of ATHILA") + 
+  scale_fill_manual(values = c("ATHILA upregulated in met1" = "#9E000B","Similarly expressed ATHILA"="#009E94")) +
+  theme(legend.position = "none") +
+  labs(x = NULL, y = "Log2 fold change")
+ggsave("figures/box1.png", box, width = 4.5, height = 8, dpi = 400)
+
+
+```
+
+
+PROJECT 2:  PRJNA300685
+```{r PRJNA300685}
+#####Annotations#####
+reps_2 = c(rep("WT",3), rep("ddm1", 3))
+cols_2 = c("ddm1" = "#45009E", "WT" = "#5A9E00")
+
+#####PCA#####
+pca = pca_biplot(PRJNA300685, "", reps_2, cols_2)
+#ggsave("figures/pca2.png", pca, width = 8, height = 8, dpi = 300)
+
+#############HEATMAP#####################
+log2_PRJNA300685 = log2_filt(PRJNA300685)
+heatmap = heatmap_fun2(log2_PRJNA300685, "", c(2,2), reps_2, cols_2)
+ggsave("figures/heatmap2.png", heatmap, width = 8, height = 9, dpi = 400)
+
+#############DEG genes############
+project_hclust_athila = hclust(dist(log2_PRJNA300685), method = "ward.D2")
+athila_col = cutree(tree = project_hclust_athila, k = 2, h = NULL)
+athila_col=data.frame(cluster = ifelse(test = athila_col == 1,yes = "cluster1", no = "cluster2"))
+condition_col = athila_col$cluster
+#Upregulated in ddm1 compared to wt
+#PRJNA300685_up = rownames(log2_PRJNA300685)[condition_col=="cluster1"]
+ddm1_up = rownames(log2_PRJNA300685)[condition_col=="cluster2"]
+ddm1_wt_same = rownames(log2_PRJNA300685)[condition_col=="cluster1"]
+
+
+#####Log2 FC######
+fc = data.frame(rowMeans(log2_PRJNA300685[,4:6]) - rowMeans(log2_PRJNA300685[,1:3]))
+colnames(fc) = "log2fc"
+fc_1 = fc[rownames(fc)%in%ddm1_up,]
+fc_2 =fc[rownames(fc)%in%ddm1_wt_same,]
+bp = data.frame(group = c(rep("ATHILA upregulated in ddm1",length(fc_1)),rep("Similarly expressed ATHILA",length(fc_2))), value = c(fc_1, fc_2))
+
+box = ggplot(bp, aes(x=group, y=value, fill=group)) +
+  geom_boxplot() +
+  theme_minimal() +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  ggtitle("") + 
+  scale_fill_manual(values = c("ATHILA upregulated in ddm1" = "#9E000B","Similarly expressed ATHILA"="#009E94")) +
+  theme(legend.position = "none") +
+  labs(x = NULL, y = "Log2 fold change")
+ggsave("figures/box2.png", box, width = 8, height = 8, dpi = 400)
+
+#Arranging figures
+arr = ggarrange(pca, box, nrow = 2, ncol=1, labels = "AUTO")
+ggsave("figures/pcabox2.png", arr, width = 6, height = 12, dpi = 400)
+
+
+```
+
+PROJECT 3: PRJNA716808
+```{r PRJNA716808}
+#####Annotation#####
+reps_3 = c(rep("WT",3), rep("ddcc", 2), rep("met1", 2), rep("mddcc",3))
+cols_3 = c("WT" = "#5A9E00", "ddcc"="#45009E", "met1"= "#009E94", "mddcc" = "#9E000B")
+
+#################PCA######################
+pca = pca_biplot(PRJNA716808, "", reps_3, cols_3)
+
+#############HEATMAP#####################
+
+#complete heatmap
+PRJNA716808_log2 = log2_filt(PRJNA716808)
+heatmap = heatmap_fun2(PRJNA716808_log2, "", c(4,3), reps_3, cols_3)
+#heatmap_fun2(PRJNA716808_log2_sub3, "", c(2,2))
+ggsave("figures/heatmap3.png", heatmap, width = 11, height = 9, dpi = 400)
+
+#Met19 and wt heatmap
+#PRJNA716808_2log2 = log2_filt(PRJNA716808_2)
+#heatmap_fun2(PRJNA716808_2log2, "Subsection heatmap", c(2,2))
+
+#############DEG genes############
+#For the whole dataframe
+project_hclust_athila = hclust(dist(PRJNA716808_log2), method = "ward.D2")
+athila_col = cutree(tree = project_hclust_athila, k = 3, h = NULL)
+athila_col=data.frame(cluster = ifelse(test = athila_col == 1, (ifelse(test = athila_col == 2,yes = "cluster2", no = "cluster3")), yes = "cluster1"))
+condition_col = athila_col$cluster
+plot(project_hclust_athila, main = "Hierarchical Clustering Dendrogram", labels = FALSE)
+rect.hclust(project_hclust_athila, k = 3, border = 2:4)
+table(athila_col)
+met19_up = rownames(PRJNA716808_log2)[condition_col=="cluster2"]
+mddcc_ddcc_met19_up = rownames(PRJNA716808_log2)[condition_col=="cluster3"]
+met19_up = c(met19_up, mddcc_ddcc_met19_up)
+all_same = rownames(PRJNA716808_log2)[condition_col=="cluster1"]
+
+
+#####Log2 FC######
+fc_all = data.frame(rowMeans(PRJNA716808_log2[,4:10]) - rowMeans(PRJNA716808_log2[,1:3]))
+fc_met19 = data.frame(rowMeans(PRJNA716808_log2[,6:10]) - rowMeans(PRJNA716808_log2[,1:5]))
+colnames(fc_all) = "log2fc"
+colnames(fc_met19) = "log2fc"
+
+fc_1 = fc_all[rownames(fc_all)%in%all_same,]
+fc_2 =fc_met19[rownames(fc_met19)%in%met19_up,]
+bp = data.frame(group = c(rep("ATHILA upregulated in met1/mddcc",length(fc_1)),rep("Similarly expressed ATHILA",length(fc_2))), value = c(fc_1, fc_2))
+
+box = ggplot(bp, aes(x=group, y=value, fill=group)) +
+  geom_boxplot() +
+  theme_minimal() +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  ggtitle("") + 
+  scale_fill_manual(values = c("ATHILA upregulated in met1/mddcc" = "#9E000B","Similarly expressed ATHILA"="#009E94")) +
+  theme(legend.position = "none") +
+  labs(x = NULL, y = "Log2 fold change")
+#ggsave("figures/box2.png", box, width = 8, height = 8, dpi = 400)
+
+
+arr = ggarrange(pca, box, nrow = 2, ncol=1, labels = "AUTO")
+ggsave("figures/pcabox3.png", arr, width = 6, height = 12, dpi = 400)
+
+
+```
+
+PROJECT 4: PRJNA529391
+
+```{r PRJNA529391}
+#####Annotation#####
+reps_4 = c(rep("ddm1",3), rep("ddm1/rdr6", 3))
+cols_4 = c( "ddm1"= "#009E94", "ddm1/rdr6" = "#9E000B")
+
+#################PCA######################
+
+pca = pca_biplot(PRJNA529391, "PCA PRJNA529391", reps_4, cols_4)
+ggsave("figures/pca4.png", pca, width = 4.7, height = 6, dpi = 300)
+
+###########HEATMAPS##################
+
+log2_PRJNA529391 = log2_filt(PRJNA529391)
+heatmap = heatmap_fun2(log2_PRJNA529391, "", c(2,1), reps_4, cols_4)
+ggsave("figures/heatmap4.png", heatmap, width = 8, height = 9, dpi = 300)
+dim(log2_PRJNA529391)
+
+#############DEG genes############
+###No wt so have excluded this one
+
+#####Log FC#####
+fc_all = data.frame(rowMeans(log2_PRJNA529391[,4:6]) - rowMeans(log2_PRJNA529391[,1:3]))
+colnames(fc_all) = "log2fc"
+fc_all$log2fc
+bp = data.frame(group = c(rep("Similarly expressed ATHILA",nrow(fc_all))), value = c(fc_all$log2fc))
+
+box = ggplot(bp, aes(x=group, y=value, fill=group)) +
+  geom_boxplot() +
+  theme_minimal() +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  ggtitle("") + 
+  scale_fill_manual(values = c("Similarly expressed ATHILA"="#009E94")) +
+  theme(legend.position = "none") +
+  labs(x = NULL, y = "Log2 fold change")
+
+
+arr = ggarrange(pca, box, nrow = 2, ncol=1, labels = "AUTO")
+ggsave("figures/pcabox4.png", arr, width = 4.5, height = 12, dpi = 400)
+
+```
+
+PROJECT 5: PRJNA280957 
+
+```{r PRJNA280957}
+################PCA############################
+PRJNA280957
+cols_5 = c("WT" = "#5A9E00", "brat1" = "#45009E", "nrpe1" = "#009E94","nrpe1/brat1"= "#9E000B")
+reps_5 = c(rep("WT",2), rep("brat1", 2),rep("nrpe1", 2), rep("nrpe1/brat1", 2))
+pca_5 = pca_biplot(PRJNA280957, "PCA plot PRJNA280957", reps_5, cols_5)
+#ggsave("figures/pca2.png", heatmap, width = 8, height = 8, dpi = 400)
+
+###########HEATMAPS##################
+
+log2_PRJNA280957 = log2_filt(PRJNA280957)
+heatmap_5 = heatmap_fun2(log2_PRJNA280957, "", c(4,1), reps_5, cols_5)
+ggsave("figures/heatmap5.png", heatmap_5, width = 5, height = 9, dpi = 300)
+
+#############DEG genes############ 
+###Not obvious upregulation of certain genes so have excluded this one from DEG analysis
+
+
+
+```
+PROJECT 6 PRJNA439011
+
+```{r PRJNA439011}
+PRJNA439011
+#####Annotation#####
+cols_6 = c("WT" = "#5A9E00", "ago4-2" = "#45009E", "ago4-3" = "#7B009E")
+reps_6 = c(rep("WT",2), rep("ago4-2", 2),rep("ago4-3", 2))
+#################PCA######################
+pca_6 = pca_biplot(PRJNA439011, "PCA PRJNA439011", reps_6, cols_6)
+#ggsave("pca.png", pca, width = 8, height = 6, dpi = 300)
+
+#############HEATMAP#####################
+log2_PRJNA439011 = log2_filt(PRJNA439011)
+heatmap_6 = heatmap_fun2(log2_PRJNA439011, "PRJNA529391", c(2,2), reps_6, cols_6)
+ggsave("figures/heatmap6.png", heatmap_6, width = 5, height = 9, dpi = 300)
+
+#############DEG genes############
+#none
+
+```
+
+
+Project 7: PRJNA342309
+
+```{r PRJNA342309}
+#Annotation
+PRJNA342309
+cols_7 = c("WT leaf" = "#5A9E00","WT mei" = "#45009E", "drm1/2 leaf" = "#76D000", "drm1/2 mei" = "#7B009E")
+reps_7 = c(rep("WT leaf",3),"drm1/2 leaf", rep("WT mei", 3),rep("drm1/2 mei", 5))
+#################PCA######################
+
+pca_7 = pca_biplot(PRJNA342309, "PCA PRJNA342309", reps_7, cols_7)
+#ggsave("pca.png", pca, width = 8, height = 6, dpi = 300)
+
+#############HEATMAP#####################
+log2_PRJNA342309 = log2_filt(PRJNA342309)
+heatmap = heatmap_fun2(log2_PRJNA342309, "", c(2,2), reps_7, cols_7)
+ggsave("figures/heatmap7.png", heatmap, width = 7, height = 9, dpi = 300)
+
+#Heatmap of average meiocyte samples
+log2_PRJNA342309_av = log2_filt(PRJNA342309_av)
+
+heatmap = heatmap_fun2(log2_PRJNA342309_av, "PRJNA342309 average", c(2,3))
+ggsave("heatmap.png", heatmap, width = 8, height = 8, dpi = 300)
+
+```
+
+Combining 5,6,7 in a single figure
+```{r combi}
+arr = ggarrange(pca_5,pca_6,pca_7, nrow = 3, ncol=1, labels = "AUTO")
+ggsave("figures/pcabox567.png", arr, width = 7, height = 19, dpi = 400)
+
+```
+
+
+Project Tissue 1 - PRJEB32665
+```{r PRJEB32665}
+#################PCA######################
+cols_8 = c("sepal" = "#008000", "stem_node" = "#0000FF", "stem_internode" = "#FF0000", "cauline_leaf" = "#FFFF00", "petiole" = "#FFA500", "adult_vasc_leaf" = "#800080", "flower_pedicel" = "#FFC0CB", "petal" = "#ADD8E6", "root_septum" = "#A52A2A", "fruit_valve" = "#006400", "callus" = "#90EE90", "cotyledon" = "#00FFFF", "hypocotyl" = "#00008B", "stamen" = "#FF00FF", "mixed_sam" = "#8B0000", "carpel" = "#FFD700", "flower" = "#E6E6FA", "root_tip" = "#008080", "silique" = "#FA8072", "root_cellculture" = "#800000")
+reps_8 = c("sepal", "stem_node", "stem_internode", "cauline_leaf", "petiole", "adult_vasc_leaf", "flower_pedicel", "petal", "root_septum", "fruit_valve", "callus", "cotyledon", "hypocotyl", "stamen", "mixed_sam", "cotyledon", "carpel", "flower", "root_tip", "silique", "root_cellculture")
+cols_9 = c("sepal" = "#008000", "stem_node" = "#0000FF", "stem_internode" = "#FF0000", "cauline_leaf" = "#FFFF00", "petiole" = "#FFA500", "adult_vasc_leaf" = "#800080", "flower_pedicel" = "#FFC0CB", "petal" = "#ADD8E6", "root_septum" = "#A52A2A", "fruit_valve" = "#006400", "callus" = "#90EE90", "cotyledon" = "#00FFFF", "hypocotyl" = "#00008B", "stamen" = "#FF00FF", "mixed_sam" = "#8B0000", "carpel" = "#FFD700", "flower" = "#E6E6FA", "root_tip" = "#008080", "silique" = "#FA8072")
+
+reps_9 = c("sepal", "stem_node", "stem_internode", "cauline_leaf", "petiole", "adult_vasc_leaf", "flower_pedicel", "petal", "root_septum", "fruit_valve", "callus", "cotyledon", "hypocotyl", "stamen", "mixed_sam", "cotyledon", "carpel", "flower", "root_tip", "silique")
+pca = pca_biplot(PRJEB32665_av, "PCA PRJEB32665", reps_8, cols_8)
+ggsave("pcatissue.png", pca, width = 11, height = 11, dpi = 300)
+PRJEB32665_av
+PRJEB32665_tpm = tpm_fun(PRJEB32665)
+#############HEATMAP#####################
+
+#All samples
+log2_PRJEB32665 = log2_filt(PRJEB32665)
+heatmap = heatmap_fun2(log2_PRJEB32665, "PRJEB32665", c(2,2))
+#ggsave("heatmap.png", heatmap, width = 8, height = 8, dpi = 300)
+#Averaged samples
+log2_PRJEB32665_av = log2_filt(PRJEB32665_av)
+heatmap = heatmap_fun2(log2_PRJEB32665_av, "PRJEB32665, average", c(2,2), reps_8, cols_8)
+ggsave("heatmaptissue1.png", heatmap, width = 12, height = 12, dpi = 300)
+
+#Without cell culture
+log2_PRJEB32665_av2 = log2_filt(PRJEB32665_av2)
+heatmap = heatmap_fun2(log2_PRJEB32665_av2, "PRJEB32665, average, without root cell culture", c(2,3), reps_9, cols_9)
+ggsave("heatmaptissue2.png", heatmap, width = 12, height = 8, dpi = 300)
+
+
+```
+
+
+PROJECT LR: PRJEB53881
+
+```{r PRJEB53881}
+#####Annotation#####
+cols_8 = c("WT" = "#5A9E00", "ddm1"="#45009E", "met1"= "#009E94", "suvh456" = "#9E000B")
+reps_8 = c(rep("WT",2), rep("met1", 3), rep("ddm1", 3), rep("suvh456",3))
+
+PRJEB53881_2
+#################PCA######################
+pca_8 = pca_biplot(PRJEB53881_2, "", reps_8, cols_8)
+#ggsave("pca.png", pca, width = 8, height = 6, dpi = 300)
+
+
+#############HEATMAP#####################
+#All samples
+PRJEB53881_log2 = log2_filt(PRJEB53881_2)
+heatmap = heatmap_fun2(PRJEB53881_log2, "", c(3,2), reps_8, cols_8)
+ggsave("figures/heatmap8.png", heatmap, width = 10, height = 9, dpi = 300)
+#Methylation samples
+PRJEB53881_2_log2 = log2_filt(PRJEB53881_2)
+heatmap = heatmap_fun2(PRJEB53881_2_log2, "PRJEB53881 Long read RNAseq", c(3,2))
+ggsave("heatmap.png", heatmap, width = 10, height = 8, dpi = 300)
+#Just met1
+PRJEB53881_met1 = PRJEB53881_2[1:5]
+PRJEB53881_met1log2= log2_filt(PRJEB53881_met1)
+heatmap_fun2(PRJEB53881_met1log2)
+#Just ddm1
+PRJEB53881_ddm1 = PRJEB53881_2[c(1,2,6,7,8)]
+PRJEB53881_ddm1log2 =log2_filt(PRJEB53881_ddm1)
+heatmap_fun2(PRJEB53881_ddm1log2)
+
+#Averages
+PRJEB53881_av_log2 = log2_filt(PRJEB53881_av)
+heatmap = heatmap_fun2(PRJEB53881_av_log2, "PRJEB53881 Long read RNAseq", c(4,2))
+dim(PRJEB53881_2_log2)
+
+
+#############DEG genes############
+#met1
+lr_met1_up = rownames(PRJEB53881_met1log2)
+lr_ddm1_up = rownames(PRJEB53881_ddm1log2)
+met1ddm1suvh456_ATHILA = rownames(PRJEB53881_2_log2)
+PRJEB53881_2_log2
+project_hclust_athila = hclust(dist(PRJEB53881_2_log2), method = "ward.D2")
+athila_col = cutree(tree = project_hclust_athila, k = 2, h = NULL)
+athila_col=data.frame(cluster = ifelse(test = athila_col == 1, yes = "cluster1", no = "cluster2"))
+condition_col = athila_col$cluster
+ddm1met1_up = rownames(PRJEB53881_2_log2)
+ddm1met1suvh_up = rownames(PRJEB53881_2_log2)[condition_col=="cluster2"]
+length(ddm1met1_up)
+length(ddm1met1suvh_up)
+
+
+#####Log FC#####
+fc_all = data.frame(rowMeans(PRJEB53881_log2[,3:11]) - rowMeans(PRJEB53881_log2[,1:2]))
+colnames(fc_all) = "log2fc"
+fc_all$log2fc
+bp = data.frame(group = c(rep("Highly expressed ATHILA",nrow(fc_all))), value = c(fc_all$log2fc))
+
+box = ggplot(bp, aes(x=group, y=value, fill=group)) +
+  geom_boxplot() +
+  theme_minimal() +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  ggtitle("") + 
+  scale_fill_manual(values = c("Highly expressed ATHILA"="#009E94")) +
+  theme(legend.position = "none") +
+  labs(x = NULL, y = "Log2 fold change")
+
+
+arr = ggarrange(pca_8, box, nrow = 2, ncol=1, labels = "AUTO")
+ggsave("figures/pcabox8.png", arr, width = 5.5, height = 12, dpi = 400)
+
+
+```
+
+Further analysis
+```{r short and long read comparison}
+
+#####Comparing long and short reads#####
+
+#Single an multimapping barplots
+N_sm = function(total_reads, N_unmapped, N_multimapping, N_nofeature){
+  N_notsingle = sum(N_unmapped, N_multimapping, N_nofeature)
+  return(total_reads-N_notsingle)
+}
+N_sm(42841788, 254452,257558,10205131)
+
+shortread_sm = mean(c(N_sm(42841788/4, 254452,257558,10205131), N_sm(31834192/4, 200043,176641,7585618), N_sm(43621628/4,374453,295393,10241019), N_sm(67691556/4,568968,515702,15711853), N_sm(57312284/4,529167,432903,13265203), N_sm(58737372/4,439190,431985,13691584)))
+shortread_mm = mean(c(257558,200043,295393,515702,432903,431985))
+#Long reads have 100% uniquely mapped reads
+shortread_sm_perc = shortread_sm/(shortread_mm+shortread_sm)*100
+shortread_mm_perc = shortread_mm/(shortread_mm+shortread_sm)*100
+shortread_mm_perc
+shortread_sm_perc
+shortlong_smmm = data.frame("Short read" = c(shortread_sm_perc, shortread_mm_perc), "Long read" = c(100,0))
+row.names(shortlong_smmm) = c("Uniquely mapping", "Multi mapping")
+chisq.test(shortlong_smmm)
+  
+
+#Collating short and long read data - ddm1 and met1 upregulated ATHILA
+
+shortreads_df = cbind(tpm_fun(PRJEB9919), tpm_fun(PRJNA280957), tpm_fun(PRJNA529391), tpm_fun(PRJNA342309), tpm_fun(PRJNA300685), tpm_fun(PRJNA439011), tpm_fun(PRJNA716808), tpm_fun(PRJEB32665))
+shortreads_df
+shortread_av = rowMeans(shortreads_df)
+longreads_df = cbind(tpm_fun(PRJEB53881))
+longread_av = rowMeans(longreads_df)
+shortlong_df = cbind(shortread_av, longread_av)
+shortlong_df = shortlong_df[apply(shortlong_df > 0, 1, function(x) sum(x) >= 2), ]
+shortlong_log2 = data.frame(log2(shortlong_df +1))
+
+#Short and long reads - mutants in common
+shortreads_df2 = cbind(shortreads_df[4:6], shortreads_df[15:17], shortreads_df[36:38], shortreads_df[50:51])
+shortread_av2 = rowMeans(shortreads_df2)
+longreads_df2 = longreads_df[3:8]
+longread_av2 = rowMeans(longreads_df2)
+shortlong_df2 = cbind(shortread_av2, longread_av2)
+shortlong_df2 = shortlong_df2[apply(shortlong_df2 > 0, 1, function(x) sum(x) >= 2), ]
+shortlong_log22 = data.frame(log2(shortlong_df2 +1))
+shortlong_log2
+shortlong_log22
+
+shortlong_lm2 = lm(longread_av2 ~ shortread_av2, data = shortlong_log22)
+summary(shortlong_lm2)
+plotls = ggplot(shortlong_log22, aes(x=shortread_av2, y =longread_av2))+
+  geom_point(aes(color = ifelse(longread_av2 >  shortread_av2, "Long reads higher TPM", "Short reads higher TPM")))+
+  geom_abline(intercept = 0, slope = 1, color = "black", linetype = "dashed") +
+  geom_smooth(aes(color = "Linear Regression"),method = "lm", formula = y ~ x, se = FALSE) +
+  labs(title = "",
+       x = "Short reads (log2 TPM)",
+       y = "Long reads (log2 TPM)") +
+  coord_cartesian(ylim = c(0, 16), xlim = c(0, 16))+
+  scale_color_manual(name = "",values = c("Long reads higher TPM" = "#5A9E00", "Short reads higher TPM" = "#005A9E", "Linear Regression"= "#9E005A"))+
+  theme(legend.position = "bottom",
+        legend.box = "horizontal")
+plot(shortlong_log22)
+
+abline(shortlong_lm2, col="red")
+
+#Filtering the long and short to make a venn diagram (second one)
+short_filt = shortreads_df2[apply(shortreads_df2 > 0, 1, function(x) sum(x) >= 2), ]
+long_filt = longreads_df2[apply(longreads_df2 > 0, 1, function(x) sum(x) >= 2), ]
+
+short_ATHILA = rownames(short_filt)
+long_ATHILA = rownames(long_filt)
+shortlong_ATHILA_lst= list(short_ATHILA, long_ATHILA)
+vennls = ggVennDiagram(shortlong_ATHILA_lst, category.names = c("Short", "Long"), ) + scale_fill_gradient(low = "#E3CDFF", high = "#45009E")
+
+
+arr = ggarrange(vennls, plotls, nrow = 1, ncol=2, labels = "AUTO")
+
+```
+```{r comparing the different studies that have upregulation}
+#####Venn diagram #####
+
+#the upregulated lists available: met1ddm1mddcc_ATHILA, met1_ATHILA, ddm1_ATHILA, met1ddm1suvh456_ATHILA
+#venn_up = list(met1_up, ddm1_up, met19_up, lr_met1_)
+venn_up = list(met1_up, ddm1_up, met19_up, ddm1met1_up)
+venncg = ggVennDiagram(venn_up, category.names = c("met1", "ddm1","metddm1mddcc", "met1ddm1suvh456 lr"), show_intersect = FALSE,label = "count")+
+  scale_fill_gradient(low = "#E3CDFF", high = "#45009E")
+#ggsave("venn.png", venn, width = 8, height = 8, dpi = 300)
+?ggVennDiagram
+#The intersect of all the lists - consistently involved in CG methylation
+ATHILA_all_attributes = cbind(PRJEB9919, ATHILA_fams, ATHILA_cen, ATHILA_chr)
+CG_mutants_int = Reduce(intersect, venn_up)
+CG_int_df = ATHILA_all_attributes[rownames(ATHILA_all_attributes) %in% CG_mutants_int,]
+CG_int_fam = CG_int_df$Combo_family
+CG_int_cen = CG_int_df$Centromeric
+CG_int_chr = CG_int_df$Chromosome
+CG_fam_freq = data.frame(table(CG_int_fam), row.names = TRUE)
+CG_cen_freq = data.frame(table(CG_int_cen))
+
+#####ATHILA FAMILIES#####
+table(ATHILA_fams)
+ATHILAfam_CG_tot = data.frame(Frequency = c(6,8,46,87,19,54,11,34,12,32,12,5,10))
+row.names(ATHILAfam_CG_tot) = c("ATHILA_general", "ATHILA0", "ATHILA1", "ATHILA2+hybrid0/5", "ATHILA3", "ATHILA4", "ATHILA4a", "ATHILA4c","ATHILA5","ATHILA6a", "ATHILA6b","ATHILA7a","ATHILA8a")
+CG_fam_freq2 = data.frame(Freq = c(1,1,15,25,6,12,4,4,4,14,7,2,3))
+row.names(CG_fam_freq2) = c("ATHILA_general", "ATHILA0", "ATHILA1", "ATHILA2+hybrid0/5", "ATHILA3", "ATHILA4", "ATHILA4a", "ATHILA4c","ATHILA5","ATHILA6a", "ATHILA6b","ATHILA7a","ATHILA8a")
+CG_fam_norm = CG_fam_freq2/ATHILAfam_CG_tot
+CG_fam_norm$ATHILA = rownames(CG_fam_norm)
+CG_fam_norm$Category = c(rep("commonly expressed ATHILA", 13))
+pie(CG_fam_norm$Freq, labels = rownames(CG_fam_norm), main="Family distribution of 36 commonly expressed ATHILA in CG mutants")
+barfam = ggplot(CG_fam_norm, aes(fill=ATHILA, y=Freq, x=Category)) + 
+    geom_bar(position="fill", stat="identity") +
+    labs(x = "", y = "Proportion of ATHILA families") +
+  scale_fill_manual(values = c("ATHILA_general" = "#EC6DFF", "ATHILA0"= "#5BC3FF", "ATHILA1"="#FFDB58", "ATHILA2+hybrid0/5"="#5A9E00", "ATHILA3"="#202092", "ATHILA4" ="#9E005A", "ATHILA4a"= "#86008C", "ATHILA4c" = "#6D008C","ATHILA5"="#007580","ATHILA6a" = "#FF5700", "ATHILA6b" = "#FFAC00","ATHILA7a"= "#BABED0","ATHILA8a"= "#FFA4E1"))
+#ggsave("figures/family.png", plot, width = 5, height = 9, dpi = 300)
+
+#####CENTROMERIC#####
+
+#for the one that has no wt but improved clsutering of individual mutants
+CG_cen_df <- data.frame(
+  Centromeric = c("Centromeric" , "Non-centromeric"),
+  Value = c(42,99), 
+  total = c(56,285)
+)
+
+
+CG_cen_df2 = data.frame("Centromeric" = c(42,18), "Non-centromeric" = c(56,186))
+row.names(CG_cen_df2) = c("Expressed", "Not expressed")
+ chisq.test(CG_cen_df2)
+
+
+# Create a grouped stacked bar plot with total in the background
+bar_cen = ggplot(CG_cen_df) +
+  geom_bar(aes(x = Centromeric, y = total), position = "dodge2", fill = "#BEFF68", alpha = 0.4, stat = "identity") + 
+  geom_bar(aes(x = Centromeric, y = Value), position = "dodge2", stat = "identity", fill ="#5A9E00") +
+  labs(title = "",
+       x = "Location in the chromosome",
+       y = "Number of ATHILA expressed, compared to total") +
+  theme_minimal()
+#ggsave("CG_barplot.png", CG_plot, width = 5, height = 8, dpi = 300)
+#legend for the centromeremere bar plot
+cen_legend = data.frame(Legend = c('Total ATHILA', 'Expressed ATHILA'),values=c(1,1))
+ ggplot(cen_legend, aes(x = Legend, y = values, fill=Legend)) +
+  geom_bar(stat = "identity") +
+  labs(title = "", x = "Genotype", y = "Total ATHILA")+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_fill_manual(values = c('Expressed ATHILA'="#5A9E00", 'Total ATHILA'="#BEFF68"))
+ggsave("figures/bar_total_legend.png", legend, width = 10, height = 6, dpi = 300)
+#####CHROMOSOMES######
+table(ATHILA_chr)
+table(CG_int_chr)
+
+CG_chr_norm = data.frame(Chromosome = c("Chr3", "Chr4","Chr5"), Proportion = c(16/62,31/60, 51/82), Category = c(rep("101 commonly expressed ATHILA", 3)))
+
+
+
+bar_chr = ggplot(CG_chr_norm, aes(fill=Chromosome, y=Proportion, x=Category)) + 
+    geom_bar(position="fill", stat="identity") +
+    labs(x = "", y = "Proportion of chromosomes") +
+  scale_fill_manual(values = c("Chr3"= "#9E005A", "Chr4"="#005A9E","Chr5"="#5A9E00"))
+#ggsave("chr2.png", CG_plot, width = 4, height = 8, dpi = 300)
+
+
+
+#####TOTAL NUMBER OF ATHILA#####
+total_ATHILA = data.frame("Genotype" = c("met1,WT","ddm1,WT","(m)ddcc,met1,WT","met1,ddm1,suvh456,WT(LR)", "ddm1,rdr6", "ago2/4,WT", "nrpe1,brat1,WT", "meiocyte drm1/2,wt"), "Total_ATHILA"=c(nrow(log2_PRJEB9919),nrow(log2_PRJNA300685),nrow(PRJNA716808_log2),nrow(PRJEB53881_log2), nrow(log2_PRJNA529391), nrow(log2_PRJNA439011), nrow(log2_PRJNA280957), nrow(log2_PRJNA342309))
+ggplot(total_ATHILA)           
+total_ATHILA
+
+total_ATHILA$Genotype <- factor(total_ATHILA$Genotype, levels = total_ATHILA$Genotype)
+
+ggplot(total_ATHILA, aes(x = Genotype, y = Total_ATHILA, fill=Genotype)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Total ATHILA expressed in each study", x = "Genotype", y = "Total ATHILA")+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_fill_manual(values = c("met1,WT" = "#5A9E00","ddm1,WT"="#5A9E00","(m)ddcc,met1,WT"="#5A9E00","met1,ddm1,suvh456,WT(LR)" ="#5A9E00", "ddm1,rdr6"="#9E005A", "ago2/4,WT"="#5A9E00", "nrpe1,brat1,WT"="#5A9E00", "meiocyte drm1/2,wt"="#9E005A"))+
+  theme(legend.position = "none") 
+ggsave("figures/bar_total.png", plot, width = 10, height = 6, dpi = 300)
+
+
+#For the legend
+total_ATHILA_legend = data.frame(Tissue = c('Leaf/seedling tissue', 'Floral tissue', 'CG methylation'),values=c(1,1,1))
+ggplot(total_ATHILA_legend, aes(x = Tissue, y = values, fill=Tissue)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Total ATHILA by Genotype", x = "Tissue", y = "Total ATHILA")+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_fill_manual(values = c('Leaf/seedling tissue'="#5A9E00", 'Floral tissue'="#9E005A", 'Tissues'="CG methylation"))
+ggsave("figures/bar_total_legend.png", legend, width = 10, height = 6, dpi = 300)
+
+
+
+```
+
+
+ 
