@@ -19,3 +19,6 @@ The Run_ files contain the SLURM script to run the matching bash script.
 - lr_map_RNA and lr_Run_mapRNA
     - To map the long-read RNAseq data to the reference genome
     - Requires the indexing file and fastq files of the RNAseq reads of a project
+- lr_htseq and lr_Run_htseq
+    - To map the long-read RNAseq to the ATHILA annotaiton file
+    - Requires the resultant bam files
