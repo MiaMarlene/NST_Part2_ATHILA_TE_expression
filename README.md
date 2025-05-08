@@ -1,3 +1,5 @@
+Natural Sciences Part II project: Investigating the regulation of ATHILA expression in Arabidopsis thaliana
+
 # Mapping short-read RNAseq data
 
 **Step 1: The required files**
